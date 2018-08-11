@@ -21,6 +21,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         public CorsPolicy()
         {
             IsOriginAllowed = DefaultIsOriginAllowed;
+            AddVaryByOriginHeader = DefaultAddVaryByOriginHeader;
         }
 
         /// <summary>
@@ -77,6 +78,12 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         public Func<string, bool> IsOriginAllowed { get; set; }
 
         /// <summary>
+        /// Gets or sets a function which evaluates whether a Vary: Origin should be added to the
+        /// response.
+        /// </summary>
+        public Func<string, bool> AddVaryByOriginHeader { get; set; }
+
+        /// <summary>
         /// Gets the headers that the resource might use and can be exposed.
         /// </summary>
         public IList<string> ExposedHeaders { get; } = new List<string>();
@@ -121,6 +128,16 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         /// </summary>
         public bool SupportsCredentials { get; set; }
 
+        internal bool HeadersCached { get; set; }
+
+        internal string AccessControlAllowMethods { get; set; }
+
+        internal string AccessControlAllowHeaders { get; set; }
+
+        internal string AccessControlMaxAge { get; set; }
+
+        internal string AccessControlExposeHeaders { get; set; }
+
         /// <summary>
         /// Returns a <see cref="System.String" /> that represents this instance.
         /// </summary>
@@ -159,6 +176,11 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         private bool DefaultIsOriginAllowed(string origin)
         {
             return Origins.Contains(origin, StringComparer.Ordinal);
+        }
+
+        private bool DefaultAddVaryByOriginHeader(string origin)
+        {
+            return AllowAnyOrigin || Origins.Count > 1;
         }
     }
 }

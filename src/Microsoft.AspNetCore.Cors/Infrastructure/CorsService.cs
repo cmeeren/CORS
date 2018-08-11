@@ -8,6 +8,7 @@ using System.Linq;
 using Microsoft.AspNetCore.Cors.Internal;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 
@@ -18,6 +19,8 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
     /// </summary>
     public class CorsService : ICorsService
     {
+        private static readonly CorsResult FailedResult = new CorsResult();
+
         private readonly CorsOptions _options;
         private readonly ILogger _logger;
 
@@ -26,7 +29,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         /// </summary>
         /// <param name="options">The option model representing <see cref="CorsOptions"/>.</param>
         public CorsService(IOptions<CorsOptions> options)
-            : this(options, loggerFactory: null)
+            : this(options, loggerFactory: NullLoggerFactory.Instance)
         {
         }
 
@@ -78,12 +81,23 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
                 throw new ArgumentNullException(nameof(policy));
             }
 
-            var corsResult = new CorsResult();
-            var accessControlRequestMethod = context.Request.Headers[CorsConstants.AccessControlRequestMethod];
-            if (string.Equals(context.Request.Method, CorsConstants.PreflightHttpMethod, StringComparison.OrdinalIgnoreCase) &&
-                !StringValues.IsNullOrEmpty(accessControlRequestMethod))
+            var origin = context.Request.Headers[CorsConstants.Origin];
+            // A CORS-preflight request ... uses `OPTIONS` as method and includes these headers:
+            // Access-Control-Request-Method, Access-Control-Request-Headers
+            // To support legacy behavior, we'll ignore the presence of Access-Control-Request-Headers header. 
+            var requestHeaders = context.Request.Headers;
+            var isPreflightRequest =
+                string.Equals(context.Request.Method, CorsConstants.PreflightHttpMethod, StringComparison.OrdinalIgnoreCase) &&
+                requestHeaders.ContainsKey(CorsConstants.AccessControlRequestMethod);
+
+            var corsResult = new CorsResult
             {
-                _logger?.IsPreflightRequest();
+                IsPreflightRequest = isPreflightRequest,
+                IsCorsResponseAllowed = IsOriginAllowed(policy, origin),
+            };
+
+            if (isPreflightRequest)
+            {
                 EvaluatePreflightRequest(context, policy, corsResult);
             }
             else
@@ -91,81 +105,18 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
                 EvaluateRequest(context, policy, corsResult);
             }
 
+            _logger?.PolicySuccess();
             return corsResult;
         }
 
         public virtual void EvaluateRequest(HttpContext context, CorsPolicy policy, CorsResult result)
         {
-            var origin = context.Request.Headers[CorsConstants.Origin];
-            if (!IsOriginAllowed(policy, origin))
-            {
-                return;
-            }
-
-            AddOriginToResult(origin, policy, result);
-            result.SupportsCredentials = policy.SupportsCredentials;
-            AddHeaderValues(result.AllowedExposedHeaders, policy.ExposedHeaders);
-            _logger?.PolicySuccess();
+            CalculateResult(context, policy, result);
         }
 
         public virtual void EvaluatePreflightRequest(HttpContext context, CorsPolicy policy, CorsResult result)
         {
-            var origin = context.Request.Headers[CorsConstants.Origin];
-            if (!IsOriginAllowed(policy, origin))
-            {
-                return;
-            }
-
-            var accessControlRequestMethod = context.Request.Headers[CorsConstants.AccessControlRequestMethod];
-            if (StringValues.IsNullOrEmpty(accessControlRequestMethod))
-            {
-                return;
-            }
-
-            var requestHeaders =
-                context.Request.Headers.GetCommaSeparatedValues(CorsConstants.AccessControlRequestHeaders);
-
-            if (!policy.AllowAnyMethod)
-            {
-                var found = false;
-                for (var i = 0; i < policy.Methods.Count; i++)
-                {
-                    var method = policy.Methods[i];
-                    if (string.Equals(method, accessControlRequestMethod, StringComparison.OrdinalIgnoreCase))
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found)
-                {
-                    _logger?.PolicyFailure();
-                    _logger?.AccessControlMethodNotAllowed(accessControlRequestMethod);
-                    return;
-                }
-            }
-
-            if (!policy.AllowAnyHeader &&
-                requestHeaders != null)
-            {
-                foreach (var requestHeader in requestHeaders)
-                {
-                    if (!policy.Headers.Contains(requestHeader, StringComparer.OrdinalIgnoreCase))
-                    {
-                        _logger?.PolicyFailure();
-                        _logger?.RequestHeaderNotAllowed(requestHeader);
-                        return;
-                    }
-                }
-            }
-
-            AddOriginToResult(origin, policy, result);
-            result.SupportsCredentials = policy.SupportsCredentials;
-            result.PreflightMaxAge = policy.PreflightMaxAge;
-            result.AllowedMethods.Add(accessControlRequestMethod);
-            AddHeaderValues(result.AllowedHeaders, requestHeaders);
-            _logger?.PolicySuccess();
+            CalculateResult(context, policy, result);
         }
 
         /// <inheritdoc />
@@ -181,88 +132,88 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
                 throw new ArgumentNullException(nameof(response));
             }
 
-            var headers = response.Headers;
-
-            if (result.AllowedOrigin != null)
+            if (!result.IsCorsResponseAllowed)
             {
-                headers[CorsConstants.AccessControlAllowOrigin] = result.AllowedOrigin;
+                // In case a server does not wish to participate in the CORS protocol, its HTTP response to the CORS or CORS-preflight request must not include any of the above headers. 
+                return;
+            }
+
+            WriteHeader(CorsConstants.AccessControlAllowOrigin, result.AllowedOrigin);
+
+            if (result.SupportsCredentials)
+            {
+                response.Headers[CorsConstants.AccessControlAllowCredentials] = "true";
+            }
+
+            if (result.IsPreflightRequest)
+            {
+                _logger?.IsPreflightRequest();
+                // An HTTP response to a CORS-preflight request can include the following headers:
+                // `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`, `Access-Control-Max-Age`
+                WriteHeader(CorsConstants.AccessControlAllowHeaders, result.AccessControlAllowHeaders);
+                WriteHeader(CorsConstants.AccessControlAllowMethods, result.AccessControlAllowMethods);
+                WriteHeader(CorsConstants.AccessControlMaxAge, result.AccessControlMaxAge);
+            }
+            else
+            {
+                // An HTTP response to a CORS request that is not a CORS-preflight request can also include the following header:
+                // `Access-Control-Expose-Headers`
+                WriteHeader(CorsConstants.AccessControlExposeHeaders, result.AccessControlExposeHeaders);
             }
 
             if (result.VaryByOrigin)
             {
-                headers["Vary"] = "Origin";
+                response.Headers["Vary"] = "Origin";
             }
 
-            if (result.SupportsCredentials)
+            void WriteHeader(string headerName, string headerValue)
             {
-                headers[CorsConstants.AccessControlAllowCredentials] = "true";
-            }
-
-            if (result.AllowedMethods.Count > 0)
-            {
-                headers.SetCommaSeparatedValues(
-                    CorsConstants.AccessControlAllowMethods,
-                    result.AllowedMethods.ToArray());
-            }
-
-            if (result.AllowedHeaders.Count > 0)
-            {
-                headers.SetCommaSeparatedValues(
-                    CorsConstants.AccessControlAllowHeaders,
-                    result.AllowedHeaders.ToArray());
-            }
-
-            if (result.AllowedExposedHeaders.Count > 0)
-            {
-                headers.SetCommaSeparatedValues(
-                    CorsConstants.AccessControlExposeHeaders,
-                    result.AllowedExposedHeaders.ToArray());
-            }
-
-            if (result.PreflightMaxAge.HasValue)
-            {
-                headers[CorsConstants.AccessControlMaxAge]
-                    = result.PreflightMaxAge.Value.TotalSeconds.ToString(CultureInfo.InvariantCulture);
+                if (!string.IsNullOrEmpty(headerValue))
+                {
+                    response.Headers[headerName] = headerValue;
+                }
             }
         }
 
-        private void AddOriginToResult(string origin, CorsPolicy policy, CorsResult result)
+        private static void CalculateResult(HttpContext context, CorsPolicy policy, CorsResult result)
         {
-            if (policy.AllowAnyOrigin)
-            {
-                if (policy.SupportsCredentials)
-                {
-                    result.AllowedOrigin = origin;
-                    result.VaryByOrigin = true;
-                }
-                else
-                {
-                    result.AllowedOrigin = CorsConstants.AnyOrigin;
-                }
-            }
-            else if (policy.IsOriginAllowed(origin))
-            {
-                result.AllowedOrigin = origin;
+            var origin = context.Request.Headers[CorsConstants.Origin];
 
-                if(policy.Origins.Count > 1)
-                {
-                    result.VaryByOrigin = true;
-                }
+            // Indicates whether the response can be shared, via returning the literal value of the `Origin` request header
+            result.AllowedOrigin = origin;
+            result.SupportsCredentials = policy.SupportsCredentials;
+
+            // Cache header values
+            if (!policy.HeadersCached)
+            {
+                policy.AccessControlAllowHeaders = GetHeaderValue(policy.Headers);
+                policy.AccessControlAllowMethods = GetHeaderValue(policy.Methods);
+                policy.AccessControlExposeHeaders = GetHeaderValue(policy.ExposedHeaders);
+                policy.AccessControlMaxAge = policy.PreflightMaxAge?.TotalSeconds.ToString(CultureInfo.InvariantCulture);
+                policy.HeadersCached = true;
             }
+
+            if (policy.SupportsCredentials)
+            {
+                // When Access-Control-Allow-Credentials is true, Access-Control headers cannot include '*'. We'll respond
+                // with the requested headers if available.
+                result.AccessControlAllowMethods = ((string)context.Request.Headers[CorsConstants.AccessControlRequestMethod])
+                    ?? policy.AccessControlAllowMethods;
+
+                result.AccessControlAllowHeaders = ((string)context.Request.Headers[CorsConstants.AccessControlRequestHeaders])
+                    ?? policy.AccessControlAllowHeaders;
+            }
+            else
+            {
+                result.AccessControlAllowMethods = policy.AccessControlAllowMethods;
+                result.AccessControlAllowHeaders = policy.AccessControlAllowHeaders;
+            }
+
+            result.VaryByOrigin = policy.AddVaryByOriginHeader(origin);
+            result.AccessControlExposeHeaders = policy.AccessControlExposeHeaders;
+            result.AccessControlMaxAge = policy.AccessControlMaxAge;
         }
 
-        private static void AddHeaderValues(IList<string> target, IEnumerable<string> headerValues)
-        {
-            if (headerValues == null)
-            {
-                return;
-            }
-
-            foreach (var current in headerValues)
-            {
-                target.Add(current);
-            }
-        }
 
         private bool IsOriginAllowed(CorsPolicy policy, StringValues origin)
         {
@@ -280,6 +231,31 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             _logger?.PolicyFailure();
             _logger?.OriginNotAllowed(origin);
             return false;
+        }
+
+        private static string GetHeaderValue(IList<string> headerValues)
+        {
+            if (headerValues.Count == 0)
+            {
+                return string.Empty;
+            }
+            else if (headerValues.Count == 1)
+            {
+                return headerValues[0];
+            }
+
+            return string.Join(",", headerValues.Select(QuoteIfNeeded));
+
+            string QuoteIfNeeded(string value)
+            {
+                if (!string.IsNullOrEmpty(value) &&
+                    value.Contains(',') &&
+                    (value[0] != '"' || value[value.Length - 1] != '"'))
+                {
+                    return $"\"{value}\"";
+                }
+                return value;
+            }
         }
     }
 }

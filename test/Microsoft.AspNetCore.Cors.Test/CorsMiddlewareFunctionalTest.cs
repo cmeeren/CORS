@@ -44,11 +44,9 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         }
 
         [Theory]
-        [InlineData("GET")]
         [InlineData("HEAD")]
-        [InlineData("POST")]
         [InlineData("PUT")]
-        public async Task PolicyFailed_Disallows_PreFlightRequest(string method)
+        public async Task OriginAllowed_RespondsWithConfiguredPolicyHeaders(string method)
         {
             // Arrange
             var path = "/CorsMiddleware/9B8BB9C6-5BF2-4255-A636-DCB450D51AAE";
@@ -65,7 +63,13 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Assert
             // Middleware applied the policy and since that did not pass, there were no access control headers.
             Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-            Assert.Empty(response.Headers);
+            Assert.Collection(
+                response.Headers.OrderBy(h => h.Key),
+                kvp =>
+                {
+                    Assert.Equal("Access-Control-Allow-Origin", kvp.Key);
+                    Assert.Equal(new[] { "http://example.com" }, kvp.Value);
+                });
 
             // It should short circuit and hence no result.
             var content = await response.Content.ReadAsStringAsync();

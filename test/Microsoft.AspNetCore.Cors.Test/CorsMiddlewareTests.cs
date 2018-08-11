@@ -169,9 +169,23 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
 
                 // Assert
                 response.EnsureSuccessStatusCode();
-                Assert.Equal(2, response.Headers.Count());
-                Assert.Equal("http://localhost:5001", response.Headers.GetValues(CorsConstants.AccessControlAllowOrigin).FirstOrDefault());
-                Assert.Equal("PUT", response.Headers.GetValues(CorsConstants.AccessControlAllowMethods).FirstOrDefault());
+                Assert.Collection(
+                    response.Headers.OrderBy(kvp => kvp.Key),
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowHeaders, kvp.Key);
+                        Assert.Equal(new[] { "Header1" }, kvp.Value);
+                    },
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowMethods, kvp.Key);
+                        Assert.Equal(new[] { "PUT" }, kvp.Value);
+                    },
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowOrigin, kvp.Key);
+                        Assert.Equal(new[] { "http://localhost:5001" }, kvp.Value);
+                    });
             }
         }
 
@@ -350,9 +364,23 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
 
                 // Assert
                 response.EnsureSuccessStatusCode();
-                Assert.Equal(2, response.Headers.Count());
-                Assert.Equal("http://localhost:5001", response.Headers.GetValues(CorsConstants.AccessControlAllowOrigin).FirstOrDefault());
-                Assert.Equal("PUT", response.Headers.GetValues(CorsConstants.AccessControlAllowMethods).FirstOrDefault());
+                Assert.Collection(
+                    response.Headers.OrderBy(kvp => kvp.Key),
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowHeaders, kvp.Key);
+                        Assert.Equal(new[] { "Header1" }, kvp.Value);
+                    },
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowMethods, kvp.Key);
+                        Assert.Equal(new[] { "PUT" }, kvp.Value);
+                    },
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowOrigin, kvp.Key);
+                        Assert.Equal(new[] { "http://localhost:5001" }, kvp.Value);
+                    });
             }
         }
 
@@ -468,6 +496,56 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
                     {
                         Assert.Equal(CorsConstants.AccessControlExposeHeaders, kvp.Key);
                         Assert.Equal("AllowedHeader", Assert.Single(kvp.Value));
+                    });
+            }
+        }
+
+        [Fact]
+        public async Task CorsRequest_SetsResponseHeader_IfRequestedMethodIsNotALlowed()
+        {
+            // Arrange
+            var hostBuilder = new WebHostBuilder()
+                .Configure(app =>
+                {
+                    app.UseCors(builder =>
+                        builder.WithOrigins("http://localhost:5001")
+                            .WithMethods("POST")
+                            .AllowAnyHeader());
+
+                    app.Run(async context =>
+                    {
+                        await context.Response.WriteAsync("Cross origin response");
+                    });
+                })
+                .ConfigureServices(services => services.AddCors());
+
+            using (var server = new TestServer(hostBuilder))
+            {
+                // Act
+                // Preflight request.
+                var response = await server.CreateRequest("/")
+                    .AddHeader(CorsConstants.Origin, "http://localhost:5001")
+                    .AddHeader(CorsConstants.AccessControlRequestMethod, "PUT")
+                    .SendAsync(CorsConstants.PreflightHttpMethod);
+
+                // Assert
+                Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+                Assert.Collection(
+                    response.Headers.OrderBy(o => o.Key),
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowHeaders, kvp.Key);
+                        Assert.Equal("*", Assert.Single(kvp.Value));
+                    },
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowMethods, kvp.Key);
+                        Assert.Equal("POST", Assert.Single(kvp.Value));
+                    },
+                    kvp =>
+                    {
+                        Assert.Equal(CorsConstants.AccessControlAllowOrigin, kvp.Key);
+                        Assert.Equal("http://localhost:5001", Assert.Single(kvp.Value));
                     });
             }
         }

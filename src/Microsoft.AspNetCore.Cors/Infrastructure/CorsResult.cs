@@ -15,28 +15,46 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         private TimeSpan? _preflightMaxAge;
 
         /// <summary>
+        /// Gets or sets a value that determines if the current request is a CORS-preflight request.
+        /// </summary>
+        public bool IsPreflightRequest { get; set; }
+
+        /// <summary>
         /// Gets or sets the allowed origin.
         /// </summary>
         public string AllowedOrigin { get; set; }
+
+        public bool IsCorsResponseAllowed { get; set; }
 
         /// <summary>
         /// Gets or sets a value indicating whether the resource supports user credentials.
         /// </summary>
         public bool SupportsCredentials { get; set; }
 
+        public string AccessControlAllowMethods { get; set; }
+
+        public string AccessControlAllowHeaders { get; set; }
+
+        public string AccessControlExposeHeaders { get; set; }
+
+        public string AccessControlMaxAge { get; set; }
+
         /// <summary>
         /// Gets the allowed methods.
         /// </summary>
+        [Obsolete("Use AccessControlAllowMethods instead.")]
         public IList<string> AllowedMethods { get; } = new List<string>();
 
         /// <summary>
         /// Gets the allowed headers.
         /// </summary>
+        [Obsolete("Use AccessControlAllowHeaders instead.")]
         public IList<string> AllowedHeaders { get; } = new List<string>();
 
         /// <summary>
         /// Gets the allowed headers that can be exposed on the response.
         /// </summary>
+        [Obsolete("Use AccessControlExposeHeaders instead.")]
         public IList<string> AllowedExposedHeaders { get; } = new List<string>();
 
         /// <summary>
@@ -47,6 +65,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         /// <summary>
         /// Gets or sets the <see cref="TimeSpan"/> for which the results of a preflight request can be cached.
         /// </summary>
+        [Obsolete("Use AccessControlMaxAge instead.")]
         public TimeSpan? PreflightMaxAge
         {
             get
@@ -64,10 +83,10 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         }
 
         /// <summary>
-        /// Returns a <see cref="System.String" /> that represents this instance.
+        /// Returns a <see cref="string" /> that represents this instance.
         /// </summary>
         /// <returns>
-        /// A <see cref="System.String" /> that represents this instance.
+        /// A <see cref="string" /> that represents this instance.
         /// </returns>
         public override string ToString()
         {
@@ -75,18 +94,17 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             builder.Append("AllowCredentials: ");
             builder.Append(SupportsCredentials);
             builder.Append(", PreflightMaxAge: ");
-            builder.Append(PreflightMaxAge.HasValue ?
-                PreflightMaxAge.Value.TotalSeconds.ToString() : "null");
+            builder.Append(AccessControlMaxAge);
             builder.Append(", AllowOrigin: ");
             builder.Append(AllowedOrigin);
             builder.Append(", AllowExposedHeaders: {");
-            builder.Append(string.Join(",", AllowedExposedHeaders));
+            builder.Append(AccessControlExposeHeaders);
             builder.Append("}");
             builder.Append(", AllowHeaders: {");
-            builder.Append(string.Join(",", AllowedHeaders));
+            builder.Append(AccessControlAllowHeaders);
             builder.Append("}");
             builder.Append(", AllowMethods: {");
-            builder.Append(string.Join(",", AllowedMethods));
+            builder.Append(AccessControlAllowMethods);
             builder.Append("}");
             return builder.ToString();
         }

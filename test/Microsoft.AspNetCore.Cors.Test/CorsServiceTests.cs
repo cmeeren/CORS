@@ -39,8 +39,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Null(result.AllowedOrigin);
-            Assert.False(result.VaryByOrigin);
+            Assert.False(result.IsCorsResponseAllowed);
         }
 
         [Fact]
@@ -55,8 +54,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Null(result.AllowedOrigin);
-            Assert.False(result.VaryByOrigin);
+            Assert.False(result.IsCorsResponseAllowed);
         }
 
         [Fact]
@@ -75,12 +73,11 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Null(result.AllowedOrigin);
-            Assert.False(result.VaryByOrigin);
+            Assert.False(result.IsCorsResponseAllowed);
         }
 
         [Fact]
-        public void EvaluatePolicy_AllowAnyOrigin_DoesNotSupportCredentials_EmitsWildcardForOrigin()
+        public void EvaluatePolicy_AllowAnyOrigin_DoesNotSupportCredentials_EmitsOriginHeader()
         {
             // Arrange
             var corsService = new CorsService(new TestCorsOptions());
@@ -97,7 +94,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Equal("*", result.AllowedOrigin);
+            Assert.Equal("http://example.com", result.AllowedOrigin);
         }
 
         [Fact]
@@ -171,7 +168,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Empty(result.AllowedExposedHeaders);
+            Assert.Empty(result.AccessControlExposeHeaders);
         }
 
         [Fact]
@@ -188,8 +185,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Equal(1, result.AllowedExposedHeaders.Count);
-            Assert.Contains("foo", result.AllowedExposedHeaders);
+            Assert.Equal("foo", result.AccessControlExposeHeaders);
         }
 
         [Fact]
@@ -208,14 +204,11 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Equal(3, result.AllowedExposedHeaders.Count);
-            Assert.Contains("foo", result.AllowedExposedHeaders);
-            Assert.Contains("bar", result.AllowedExposedHeaders);
-            Assert.Contains("baz", result.AllowedExposedHeaders);
+            Assert.Equal("foo,bar,baz", result.AccessControlExposeHeaders);
         }
 
         [Fact]
-        public void EvaluatePolicy_PreflightRequest_MethodNotAllowed_ReturnsInvalidResult()
+        public void EvaluatePolicy_PreflightRequest_MethodNotAllowed()
         {
             // Arrange
             var corsService = new CorsService(new TestCorsOptions());
@@ -228,7 +221,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Empty(result.AllowedMethods);
+            Assert.Equal("GET", result.AccessControlAllowMethods);
         }
 
         [Fact]
@@ -246,168 +239,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
 
             // Assert
             Assert.NotNull(result);
-            Assert.Contains("PUT", result.AllowedMethods);
-        }
-
-        public static TheoryData<LogData> PreflightRequests_LoggingData
-        {
-            get
-            {
-                return new TheoryData<LogData>
-                {
-                    {
-                        new LogData {
-                            Origin = "http://example.com",
-                            Method = "PUT",
-                            Headers = null,
-                            OriginLogMessage = "The request has an origin header: 'http://example.com'.",
-                            PolicyLogMessage = "Policy execution failed.",
-                            FailureReason = "Request origin http://example.com does not have permission to access the resource."
-                        }
-                    },
-                    {
-                        new LogData {
-                            Origin = "http://allowed.example.com",
-                            Method = "DELETE",
-                            Headers = null,
-                            OriginLogMessage = "The request has an origin header: 'http://allowed.example.com'.",
-                            PolicyLogMessage = "Policy execution failed.",
-                            FailureReason = "Request method DELETE not allowed in CORS policy."
-                        }
-                    },
-                    {
-                        new LogData {
-                            Origin = "http://allowed.example.com",
-                            Method = "PUT",
-                            Headers = new[] { "test" },
-                            OriginLogMessage = "The request has an origin header: 'http://allowed.example.com'.",
-                            PolicyLogMessage = "Policy execution failed.",
-                            FailureReason = "Request header 'test' not allowed in CORS policy."
-                        }
-                    },
-                };
-            }
-        }
-
-        [Theory]
-        [MemberData(nameof(PreflightRequests_LoggingData))]
-        public void EvaluatePolicy_LoggingForPreflightRequests_HasOriginHeader_PolicyFailed(LogData logData)
-        {
-            var sink = new TestSink();
-            var loggerFactory = new TestLoggerFactory(sink, enabled: true);
-
-            var corsService = new CorsService(new TestCorsOptions(), loggerFactory);
-            var requestContext = GetHttpContext(method: "OPTIONS", origin: logData.Origin, accessControlRequestMethod: logData.Method, accessControlRequestHeaders: logData.Headers);
-            var policy = new CorsPolicy();
-            policy.Origins.Add("http://allowed.example.com");
-            policy.Methods.Add("PUT");
-
-            // Act
-            var result = corsService.EvaluatePolicy(requestContext, policy);
-
-            var writeList = sink.Writes.ToList();
-            Assert.Equal("The request is a preflight request.", writeList[0].State.ToString());
-            Assert.Equal(logData.OriginLogMessage, writeList[1].State.ToString());
-            Assert.Equal(logData.PolicyLogMessage, writeList[2].State.ToString());
-            Assert.Equal(logData.FailureReason, writeList[3].State.ToString());
-        }
-
-        [Fact]
-        public void EvaluatePolicy_LoggingForPreflightRequests_HasOriginHeader_PolicySucceeded()
-        {
-            var sink = new TestSink();
-            var loggerFactory = new TestLoggerFactory(sink, enabled: true);
-
-            var corsService = new CorsService(new TestCorsOptions(), loggerFactory);
-            var requestContext = GetHttpContext(method: "OPTIONS", origin: "http://allowed.example.com", accessControlRequestMethod: "PUT");
-            var policy = new CorsPolicy();
-            policy.Origins.Add("http://allowed.example.com");
-            policy.Methods.Add("PUT");
-
-            // Act
-            var result = corsService.EvaluatePolicy(requestContext, policy);
-
-            var writeList = sink.Writes.ToList();
-            Assert.Equal("The request is a preflight request.", writeList[0].State.ToString());
-            Assert.Equal("The request has an origin header: 'http://allowed.example.com'.", writeList[1].State.ToString());
-            Assert.Equal("Policy execution successful.", writeList[2].State.ToString());
-        }
-
-        [Fact]
-        public void EvaluatePolicy_LoggingForPreflightRequests_DoesNotHaveOriginHeader()
-        {
-            var sink = new TestSink();
-            var loggerFactory = new TestLoggerFactory(sink, enabled: true);
-
-            var corsService = new CorsService(new TestCorsOptions(), loggerFactory);
-            var requestContext = GetHttpContext(method: "OPTIONS", origin: null, accessControlRequestMethod: "PUT");
-            var policy = new CorsPolicy();
-            policy.Origins.Add("http://allowed.example.com");
-            policy.Methods.Add("PUT");
-
-            // Act
-            var result = corsService.EvaluatePolicy(requestContext, policy);
-
-            var writeList = sink.Writes.ToList();
-            Assert.Equal("The request is a preflight request.", writeList[0].State.ToString());
-            Assert.Equal("The request does not have an origin header.", writeList[1].State.ToString());
-        }
-
-        [Fact]
-        public void EvaluatePolicy_LoggingForNonPreflightRequests_HasOriginHeader_PolicyFailed()
-        {
-            var sink = new TestSink();
-            var loggerFactory = new TestLoggerFactory(sink, enabled: true);
-
-            var corsService = new CorsService(new TestCorsOptions(), loggerFactory);
-            var requestContext = GetHttpContext(origin: "http://example.com");
-            var policy = new CorsPolicy();
-            policy.Origins.Add("http://allowed.example.com");
-
-            // Act
-            var result = corsService.EvaluatePolicy(requestContext, policy);
-
-            var writeList = sink.Writes.ToList();
-            Assert.Equal("The request has an origin header: 'http://example.com'.", writeList[0].State.ToString());
-            Assert.Equal("Policy execution failed.", writeList[1].State.ToString());
-            Assert.Equal("Request origin http://example.com does not have permission to access the resource.", writeList[2].State.ToString());
-        }
-
-        [Fact]
-        public void EvaluatePolicy_LoggingForNonPreflightRequests_HasOriginHeader_PolicySucceeded()
-        {
-            var sink = new TestSink();
-            var loggerFactory = new TestLoggerFactory(sink, enabled: true);
-
-            var corsService = new CorsService(new TestCorsOptions(), loggerFactory);
-            var requestContext = GetHttpContext(origin: "http://allowed.example.com");
-            var policy = new CorsPolicy();
-            policy.Origins.Add("http://allowed.example.com");
-
-            // Act
-            var result = corsService.EvaluatePolicy(requestContext, policy);
-
-            var writeList = sink.Writes.ToList();
-            Assert.Equal("The request has an origin header: 'http://allowed.example.com'.", writeList[0].State.ToString());
-            Assert.Equal("Policy execution successful.", writeList[1].State.ToString());
-        }
-
-        [Fact]
-        public void EvaluatePolicy_LoggingForNonPreflightRequests_DoesNotHaveOriginHeader()
-        {
-            var sink = new TestSink();
-            var loggerFactory = new TestLoggerFactory(sink, enabled: true);
-
-            var corsService = new CorsService(new TestCorsOptions(), loggerFactory);
-            var requestContext = GetHttpContext(origin: null);
-            var policy = new CorsPolicy();
-            policy.Origins.Add("http://allowed.example.com");
-
-            // Act
-            var result = corsService.EvaluatePolicy(requestContext, policy);
-
-            var logMessage = Assert.Single(sink.Writes);
-            Assert.Equal("The request does not have an origin header.", logMessage.State.ToString());
+            Assert.Equal("PUT", result.AccessControlAllowMethods);
         }
 
         [Theory]
@@ -492,7 +324,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Null(result.PreflightMaxAge);
+            Assert.Null(result.AccessControlMaxAge);
         }
 
         [Fact]
@@ -512,7 +344,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Equal(TimeSpan.FromSeconds(10), result.PreflightMaxAge);
+            Assert.Equal("10", result.AccessControlMaxAge);
         }
 
         [Fact]
@@ -529,14 +361,13 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Equal(1, result.AllowedMethods.Count);
-            Assert.Contains("GET", result.AllowedMethods);
+            Assert.Equal("*", result.AccessControlAllowMethods);
         }
 
         [Theory]
         [InlineData("Put")]
         [InlineData("PUT")]
-        public void EvaluatePolicy_CaseInsensitivePreflightRequest_ListedMethod_ReturnsSubsetOfListedMethods(string method)
+        public void EvaluatePolicy_CaseInsensitivePreflightRequest_ReturnsAllowedMethods(string method)
         {
             // Arrange
             var corsService = new CorsService(new TestCorsOptions());
@@ -553,12 +384,11 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Equal(1, result.AllowedMethods.Count);
-            Assert.Contains(method, result.AllowedMethods);
+            Assert.Equal("PUT,DELETE", result.AccessControlAllowMethods);
         }
 
         [Fact]
-        public void EvaluatePolicy_PreflightRequest_NoHeadersRequested_AllowedAllHeaders_ReturnsEmptyHeaders()
+        public void EvaluatePolicy_PreflightRequest_NoHeadersRequested_AllowedAllHeaders()
         {
             // Arrange
             var corsService = new CorsService(new TestCorsOptions());
@@ -572,11 +402,12 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Empty(result.AllowedHeaders);
+            Assert.Equal("*", result.AccessControlAllowHeaders);
+            Assert.Equal("*", result.AccessControlAllowMethods);
         }
 
         [Fact]
-        public void EvaluatePolicy_PreflightRequest_HeadersRequested_AllowAllHeaders_ReturnsRequestedHeaders()
+        public void EvaluatePolicy_PreflightRequest_WithCredentials_AllowAllHeaders_ReturnsRequestedHeaders()
         {
             // Arrange
             var corsService = new CorsService(new TestCorsOptions());
@@ -589,14 +420,14 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             policy.Origins.Add(CorsConstants.AnyOrigin);
             policy.Methods.Add("*");
             policy.Headers.Add("*");
+            policy.SupportsCredentials = true;
 
             // Act
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Equal(2, result.AllowedHeaders.Count);
-            Assert.Contains("foo", result.AllowedHeaders);
-            Assert.Contains("bar", result.AllowedHeaders);
+            Assert.Equal("foo,bar", result.AccessControlAllowHeaders);
+            Assert.Equal("PUT", result.AccessControlAllowMethods);
         }
         
         [Fact]
@@ -619,76 +450,8 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Empty(result.AllowedHeaders);
-            Assert.Empty(result.AllowedMethods);
-            Assert.Empty(result.AllowedExposedHeaders);
-            Assert.Null(result.AllowedOrigin);
-        }
-
-        [Fact]
-        public void EvaluatePolicy_DoesCaseSensitiveComparison()
-        {
-            // Arrange
-            var corsService = new CorsService(new TestCorsOptions());
-
-            var policy = new CorsPolicy();
-            policy.Methods.Add("POST");
-            var httpContext = GetHttpContext(origin: null, accessControlRequestMethod: "post");
-
-            // Act
-            var result = corsService.EvaluatePolicy(httpContext, policy);
-
-            // Assert
-            Assert.Empty(result.AllowedHeaders);
-            Assert.Empty(result.AllowedMethods);
-            Assert.Empty(result.AllowedExposedHeaders);
-            Assert.Null(result.AllowedOrigin);
-        }
-
-        [Fact]
-        public void TryValidateOrigin_DoesCaseSensitiveComparison()
-        {
-            // Arrange
-            var corsService = new CorsService(new TestCorsOptions());
-
-            var policy = new CorsPolicy();
-            policy.Origins.Add("http://Example.com");
-            var httpContext = GetHttpContext(origin: "http://example.com");
-
-            // Act
-            var result = corsService.EvaluatePolicy(httpContext, policy);
-
-            // Assert
-            Assert.Empty(result.AllowedHeaders);
-            Assert.Empty(result.AllowedMethods);
-            Assert.Empty(result.AllowedExposedHeaders);
-            Assert.Null(result.AllowedOrigin);
-        }
-
-        [Fact]
-        public void ApplyResult_SimpleRequests_IgnoresFiltering()
-        {
-            // Arrange
-            var result = new CorsResult();
-            result.AllowedHeaders.Add("Content-Type");
-            result.AllowedHeaders.Add("Date");
-            result.AllowedMethods.Add("GET");
-            result.AllowedMethods.Add("PUT");
-
-            var httpContext = new DefaultHttpContext();
-            var service = new CorsService(new TestCorsOptions());
-
-
-            // Act
-            service.ApplyResult(result, httpContext.Response);
-
-            // Assert
-            string[] arMethods = httpContext.Response.Headers.GetCommaSeparatedValues(CorsConstants.AccessControlAllowMethods);
-            Assert.Contains("GET", arMethods);
-            Assert.Contains("PUT", arMethods);
-            string[] arHeaders = httpContext.Response.Headers.GetCommaSeparatedValues(CorsConstants.AccessControlAllowHeaders);
-            Assert.Contains("Content-Type", arHeaders);
-            Assert.Contains("Date", arHeaders);
+            Assert.Equal("match,foo", result.AccessControlAllowHeaders);
+            Assert.Equal("*", result.AccessControlAllowMethods);
         }
 
         [Fact]
@@ -712,6 +475,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Arrange
             var result = new CorsResult
             {
+                IsCorsResponseAllowed = true,
                 AllowedOrigin = "http://example.com"
             };
 
@@ -731,6 +495,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Arrange
             var result = new CorsResult
             {
+                IsCorsResponseAllowed = true,
                 AllowedOrigin = null
             };
 
@@ -750,6 +515,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Arrange
             var result = new CorsResult
             {
+                IsCorsResponseAllowed = true,
                 SupportsCredentials = true
             };
 
@@ -769,6 +535,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Arrange
             var result = new CorsResult
             {
+                IsCorsResponseAllowed = true,
                 VaryByOrigin = true
             };
 
@@ -788,6 +555,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Arrange
             var result = new CorsResult
             {
+                IsCorsResponseAllowed = true,
                 SupportsCredentials = false
             };
 
@@ -807,6 +575,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Arrange
             var result = new CorsResult
             {
+                IsCorsResponseAllowed = true,
                 // AllowMethods is empty by default
             };
 
@@ -824,8 +593,12 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         public void ApplyResult_OneAllowMethods_AllowMethodsHeaderAdded()
         {
             // Arrange
-            var result = new CorsResult();
-            result.AllowedMethods.Add("PUT");
+            var result = new CorsResult
+            {
+                IsCorsResponseAllowed = true,
+                IsPreflightRequest = true,
+                AccessControlAllowMethods = "PUT"
+            };
 
             var httpContext = new DefaultHttpContext();
             var service = new CorsService(new TestCorsOptions());
@@ -836,6 +609,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             // Assert
             Assert.Equal("PUT", httpContext.Response.Headers["Access-Control-Allow-Methods"]);
         }
+
         [Fact]
         public void ApplyResult_NoAllowHeaders_AllowHeadersHeaderNotAdded()
         {
@@ -843,6 +617,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = new CorsResult
             {
                 // AllowHeaders is empty by default
+                IsCorsResponseAllowed = true,
             };
 
             var httpContext = new DefaultHttpContext();
@@ -859,8 +634,12 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         public void ApplyResult_OneAllowHeaders_AllowHeadersHeaderAdded()
         {
             // Arrange
-            var result = new CorsResult();
-            result.AllowedHeaders.Add("foo");
+            var result = new CorsResult
+            {
+                IsCorsResponseAllowed = true,
+                IsPreflightRequest = true,
+                AccessControlAllowHeaders = "foo"
+            };
 
             var httpContext = new DefaultHttpContext();
             var service = new CorsService(new TestCorsOptions());
@@ -872,32 +651,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             Assert.Equal("foo", httpContext.Response.Headers["Access-Control-Allow-Headers"]);
         }
 
-        [Fact]
-        public void ApplyResult_ManyAllowHeaders_AllowHeadersHeaderAdded()
-        {
-            // Arrange
-            var result = new CorsResult();
-            result.AllowedHeaders.Add("foo");
-            result.AllowedHeaders.Add("bar");
-            result.AllowedHeaders.Add("baz");
 
-            var httpContext = new DefaultHttpContext();
-            var service = new CorsService(new TestCorsOptions());
-
-            // Act
-            service.ApplyResult(result, httpContext.Response);
-
-            // Assert
-            Assert.Contains("Access-Control-Allow-Headers", httpContext.Response.Headers.Keys);
-            var value = Assert.Single(httpContext.Response.Headers.Values);
-            Assert.Equal(new[] { "foo,bar,baz" }, value);
-            string[] headerValues = httpContext.Response.Headers.GetCommaSeparatedValues("Access-Control-Allow-Headers");
-            Assert.Equal(3, headerValues.Length);
-            Assert.Contains("foo", headerValues);
-            Assert.Contains("bar", headerValues);
-            Assert.Contains("baz", headerValues);
-        }
-        
         [Fact]
         public void ApplyResult_NoAllowExposedHeaders_ExposedHeadersHeaderNotAdded()
         {
@@ -905,6 +659,7 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = new CorsResult
             {
                 // AllowExposedHeaders is empty by default
+                IsCorsResponseAllowed = true,
             };
 
             var httpContext = new DefaultHttpContext();
@@ -921,8 +676,11 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
         public void ApplyResult_OneAllowExposedHeaders_ExposedHeadersHeaderAdded()
         {
             // Arrange
-            var result = new CorsResult();
-            result.AllowedExposedHeaders.Add("foo");
+            var result = new CorsResult
+            {
+                IsCorsResponseAllowed = true,
+                AccessControlExposeHeaders = "foo",
+            };
 
             var httpContext = new DefaultHttpContext();
             var service = new CorsService(new TestCorsOptions());
@@ -932,69 +690,6 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
 
             // Assert
             Assert.Equal("foo", httpContext.Response.Headers["Access-Control-Expose-Headers"]);
-        }
-
-        [Fact]
-        public void ApplyResult_ManyAllowExposedHeaders_ExposedHeadersHeaderAdded()
-        {
-            // Arrange
-            var result = new CorsResult();
-            result.AllowedExposedHeaders.Add("foo");
-            result.AllowedExposedHeaders.Add("bar");
-            result.AllowedExposedHeaders.Add("baz");
-
-            var httpContext = new DefaultHttpContext();
-            var service = new CorsService(new TestCorsOptions());
-
-            // Act
-            service.ApplyResult(result, httpContext.Response);
-
-            // Assert
-            Assert.Contains("Access-Control-Expose-Headers", httpContext.Response.Headers.Keys);
-            var value = Assert.Single(httpContext.Response.Headers.Values);
-            Assert.Equal(new[] { "foo,bar,baz" }, value);
-            string[] exposedHeaderValues = httpContext.Response.Headers.GetCommaSeparatedValues("Access-Control-Expose-Headers");
-            Assert.Equal(3, exposedHeaderValues.Length);
-            Assert.Contains("foo", exposedHeaderValues);
-            Assert.Contains("bar", exposedHeaderValues);
-            Assert.Contains("baz", exposedHeaderValues);
-        }
-
-        [Fact]
-        public void ApplyResult_NoPreflightMaxAge_MaxAgeHeaderNotAdded()
-        {
-            // Arrange
-            var result = new CorsResult
-            {
-                PreflightMaxAge = null
-            };
-
-            var httpContext = new DefaultHttpContext();
-            var service = new CorsService(new TestCorsOptions());
-
-            // Act
-            service.ApplyResult(result, httpContext.Response);
-
-            // Assert
-            Assert.DoesNotContain("Access-Control-Max-Age", httpContext.Response.Headers.Keys);
-        }
-
-        [Fact]
-        public void ApplyResult_PreflightMaxAge_MaxAgeHeaderAdded()
-        {
-            // Arrange
-            var result = new CorsResult
-            {
-                PreflightMaxAge = TimeSpan.FromSeconds(30)
-            };
-            var httpContext = new DefaultHttpContext();
-            var service = new CorsService(new TestCorsOptions());
-
-            // Act
-            service.ApplyResult(result, httpContext.Response);
-
-            // Assert
-            Assert.Equal("30", httpContext.Response.Headers["Access-Control-Max-Age"]);
         }
 
         [Fact]
@@ -1029,10 +724,8 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             var result = corsService.EvaluatePolicy(requestContext, policy);
 
             // Assert
-            Assert.Null(result.AllowedOrigin);
-            Assert.False(result.VaryByOrigin);
+            Assert.False(result.IsCorsResponseAllowed);
         }
-
 
         private static HttpContext GetHttpContext(
             string method = null,
@@ -1063,16 +756,6 @@ namespace Microsoft.AspNetCore.Cors.Infrastructure
             }
 
             return context;
-        }
-
-        public class LogData
-        {
-            public string Origin { get; set; }
-            public string Method { get; set; }
-            public string[] Headers { get; set; }
-            public string OriginLogMessage { get; set; }
-            public string PolicyLogMessage { get; set; }
-            public string FailureReason { get; set; }
         }
     }
 }
